@@ -73,6 +73,7 @@ import {
   selectBranchById,
   selectCardById,
   selectCommentById,
+  selectLoading,
   selectMcpServerById,
   selectRepoById,
   selectUserById,
@@ -91,6 +92,11 @@ import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import { AppNode } from './canvas/AppNodeLazy';
 import { ArtifactNode } from './canvas/ArtifactNodeLazy';
+import {
+  archivedBranchIdsKey,
+  archivedCardIdsKey,
+  idSetFromKey,
+} from './canvas/archivedPlacements';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { MarkdownNode } from './canvas/MarkdownNode';
 import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCursorLayer';
@@ -541,6 +547,22 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return map;
     }, [boardObjectsForBoard]);
 
+    // Archived branches/cards keep their board_objects row (zone_id included)
+    // so unarchive restores them in place; zone pinned-item counts skip them.
+    // The Sets are memoized on a sorted id key so they keep their identity
+    // across unrelated branch/card patches and don't rebuild every node.
+    const initialLoading = useAgorStore(selectLoading);
+    const archivedBranchKey = useMemo(
+      () => archivedBranchIdsKey(boardObjectByBranch.keys(), branchById, initialLoading),
+      [boardObjectByBranch, branchById, initialLoading]
+    );
+    const archivedCardKey = useMemo(
+      () => archivedCardIdsKey(boardObjectByCard.keys(), cardById),
+      [boardObjectByCard, cardById]
+    );
+    const archivedBranchIds = useMemo(() => idSetFromKey(archivedBranchKey), [archivedBranchKey]);
+    const archivedCardIds = useMemo(() => idSetFromKey(archivedCardKey), [archivedCardKey]);
+
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
@@ -795,6 +817,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       board,
       client,
       boardObjectsForBoard,
+      archivedBranchIds,
+      archivedCardIds,
       setNodes,
       deletedObjectsRef,
       eraserMode: activeTool === 'eraser',
