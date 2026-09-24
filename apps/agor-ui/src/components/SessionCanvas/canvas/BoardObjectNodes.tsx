@@ -19,16 +19,16 @@ import {
 } from '@ant-design/icons';
 import { Button, ColorPicker, Dropdown, Flex, Popover, Space, Typography, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
-import { getContrastingTextColor } from '../../../utils/theme';
 import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
 import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
 import { effectiveLabelFontSize, statusFontSizeFor } from './zoneFontSize';
+import { BoardCanvasBackgroundContext, getZoneTitleColor } from './zoneTitleContrast';
 
 // Preserve the existing import surface for CommentsPanel and external callers.
 export { ZONE_CONTENT_OPACITY } from './zoneAppearance';
@@ -96,6 +96,7 @@ const saveRecentColor = (color: string) => {
 
 const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
+  const boardBackground = useContext(BoardCanvasBackgroundContext);
   const { zoom } = useViewport();
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [label, setLabel] = useState(data.label);
@@ -249,9 +250,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
         ? toTranslucentZoneFill(data.color, `${token.colorBgContainer}40`)
         : `${token.colorBgContainer}40`);
 
-  const getTextColor = (background: string): string => getContrastingTextColor(background, token);
-
-  const textColor = getTextColor(backgroundColor);
+  // Contrast against the fill as rendered over the board, not the viewer's theme.
+  const textColor = getZoneTitleColor(backgroundColor, boardBackground, token);
 
   return (
     <>
