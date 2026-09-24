@@ -18,6 +18,11 @@ interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
   boardObjectsForBoard: BoardEntityObject[];
+  /** Archived branch/card IDs. Their board objects keep zone_id (so unarchive
+   *  restores them in place) but are left out of zone pinned-item counts.
+   *  Pass identity-stable Sets so unrelated updates don't rebuild nodes. */
+  archivedBranchIds?: ReadonlySet<string>;
+  archivedCardIds?: ReadonlySet<string>;
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
@@ -30,6 +35,8 @@ interface UseBoardObjectsProps {
   canEdit?: boolean;
 }
 
+const EMPTY_ID_SET: ReadonlySet<string> = new Set();
+
 function zonesOverlap(
   a: Extract<BoardObject, { type: 'zone' }>,
   b: Extract<BoardObject, { type: 'zone' }>
@@ -41,6 +48,8 @@ export const useBoardObjects = ({
   board,
   client,
   boardObjectsForBoard,
+  archivedBranchIds = EMPTY_ID_SET,
+  archivedCardIds = EMPTY_ID_SET,
   setNodes,
   deletedObjectsRef,
   eraserMode = false,
@@ -364,12 +373,16 @@ export const useBoardObjects = ({
         // Deliberately avoid subscribing the whole canvas to sessionsByBranch:
         // streaming session patches are high-frequency and should only update
         // the affected BranchCard's per-branch selector, not rebuild every
-        // React Flow node on the board.
+        // React Flow node on the board. Archived branches/cards keep their
+        // zone_id for in-place unarchive, so skip them here.
         let pinnedItemCount = 0;
         if (objectData.type === 'zone') {
           for (const boardObj of boardObjectsForBoard) {
-            if (boardObj.zone_id === objectId && (boardObj.branch_id || boardObj.card_id)) {
-              pinnedItemCount += 1;
+            if (boardObj.zone_id !== objectId) continue;
+            if (boardObj.branch_id) {
+              if (!archivedBranchIds.has(boardObj.branch_id)) pinnedItemCount += 1;
+            } else if (boardObj.card_id) {
+              if (!archivedCardIds.has(boardObj.card_id)) pinnedItemCount += 1;
             }
           }
         }
@@ -436,6 +449,8 @@ export const useBoardObjects = ({
   }, [
     boardObjects,
     boardObjectsForBoard,
+    archivedBranchIds,
+    archivedCardIds,
     handleUpdateObject,
     deleteZone,
     deleteObject,

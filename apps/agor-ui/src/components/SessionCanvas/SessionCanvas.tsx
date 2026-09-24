@@ -541,6 +541,34 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return map;
     }, [boardObjectsForBoard]);
 
+    // Archived branches/cards keep their board_objects row (zone_id included)
+    // so unarchive restores them in place. Collect the archived ones placed on
+    // this board so zone pinned-item counts can skip them. Keyed by a sorted id
+    // string so the Sets keep their identity across unrelated branch/card
+    // patches and don't rebuild every board-object node.
+    const archivedBranchIdsKey = useMemo(() => {
+      const ids: string[] = [];
+      for (const branchId of boardObjectByBranch.keys()) {
+        if (branchById.get(branchId)?.archived) ids.push(branchId);
+      }
+      return ids.sort().join('\n');
+    }, [boardObjectByBranch, branchById]);
+    const archivedCardIdsKey = useMemo(() => {
+      const ids: string[] = [];
+      for (const cardId of boardObjectByCard.keys()) {
+        if (cardById.get(cardId)?.archived) ids.push(cardId);
+      }
+      return ids.sort().join('\n');
+    }, [boardObjectByCard, cardById]);
+    const archivedBranchIds = useMemo(
+      () => new Set(archivedBranchIdsKey ? archivedBranchIdsKey.split('\n') : []),
+      [archivedBranchIdsKey]
+    );
+    const archivedCardIds = useMemo(
+      () => new Set(archivedCardIdsKey ? archivedCardIdsKey.split('\n') : []),
+      [archivedCardIdsKey]
+    );
+
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
@@ -795,6 +823,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       board,
       client,
       boardObjectsForBoard,
+      archivedBranchIds,
+      archivedCardIds,
       setNodes,
       deletedObjectsRef,
       eraserMode: activeTool === 'eraser',
