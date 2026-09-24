@@ -106,6 +106,9 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.pkceVerifier === 'string' &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
+    (material.tokenEndpointAuthMethod === undefined ||
+      material.tokenEndpointAuthMethod === 'client_secret_basic' ||
+      material.tokenEndpointAuthMethod === 'client_secret_post') &&
     (material.clientRegistrationId === undefined ||
       typeof material.clientRegistrationId === 'string') &&
     (material.compatibilityMode === 'strict' ||
@@ -208,6 +211,9 @@ export class MCPOAuthPendingFlowAuthority {
         pkceVerifier: input.context.pkceVerifier,
         clientId: input.context.clientId,
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
+        ...(input.context.tokenEndpointAuthMethod
+          ? { tokenEndpointAuthMethod: input.context.tokenEndpointAuthMethod }
+          : {}),
         ...(input.context.clientRegistrationId
           ? { clientRegistrationId: input.context.clientRegistrationId }
           : {}),
@@ -350,6 +356,7 @@ export class MCPOAuthPendingFlowAuthority {
         pkceVerifier: material.pkceVerifier,
         clientId: material.clientId,
         clientSecret: material.clientSecret,
+        tokenEndpointAuthMethod: material.tokenEndpointAuthMethod,
         clientRegistrationId: material.clientRegistrationId,
         state: rawState,
         // Completion never reads this field. Do not persist or reconstruct the

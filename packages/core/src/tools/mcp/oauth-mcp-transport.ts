@@ -210,6 +210,36 @@ export interface AuthorizationServerMetadata {
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
   authorization_response_iss_parameter_supported?: boolean;
+  /** RFC 8414 §2: absent means only `client_secret_basic` is supported. */
+  token_endpoint_auth_methods_supported?: string[];
+}
+
+/** How a confidential client presents its secret at the token endpoint. */
+export type OAuthClientSecretAuthMethod = 'client_secret_basic' | 'client_secret_post';
+
+/**
+ * Choose how a confidential client authenticates to the token endpoint.
+ *
+ * `client_secret_post` is used when a Dynamic Client Registration response
+ * registered the client for it, or when the authorization server advertises it
+ * and not `client_secret_basic`. Everything else keeps the RFC 8414 default of
+ * HTTP Basic. A registered `client_secret_basic` is not consulted: stored DCR
+ * records report it for every secret-bearing client, and the refresh path can
+ * only re-derive the method from metadata (see `oauth-refresh.ts`).
+ */
+export function selectClientSecretAuthMethod(
+  supported: unknown,
+  registered?: string
+): OAuthClientSecretAuthMethod {
+  if (registered === 'client_secret_post') return 'client_secret_post';
+  if (
+    Array.isArray(supported) &&
+    supported.includes('client_secret_post') &&
+    !supported.includes('client_secret_basic')
+  ) {
+    return 'client_secret_post';
+  }
+  return 'client_secret_basic';
 }
 
 // Re-export the canonical OAuthTokenResponse from oauth-auth to avoid duplication
@@ -548,7 +578,12 @@ export async function fetchResourceMetadata(
 // Cache for dynamically registered clients (per authorization server)
 const dynamicClientCache = new Map<
   string,
-  { client_id: string; client_secret?: string; redirect_uri: string }
+  {
+    client_id: string;
+    client_secret?: string;
+    token_endpoint_auth_method?: string;
+    redirect_uri: string;
+  }
 >();
 
 const MAX_DCR_RESPONSE_BYTES = 16 * 1024;
@@ -632,18 +667,21 @@ function validateDynamicClientRegistration(
       'Dynamic Client Registration did not bind the required redirect URI'
     );
   }
-  // A returned secret is authoritative even when the provider echoes `none`.
-  // The token exchange routes any present secret through HTTP Basic.
+  // A returned secret is authoritative even when the provider echoes `none`:
+  // the token exchange then presents it as HTTP Basic unless the provider
+  // registered the client for `client_secret_post`.
   const authMethod = result.client_secret
-    ? 'client_secret_basic'
+    ? result.token_endpoint_auth_method === 'client_secret_post'
+      ? 'client_secret_post'
+      : 'client_secret_basic'
     : (result.token_endpoint_auth_method ?? 'none');
-  if (!['none', 'client_secret_basic'].includes(authMethod)) {
+  if (!['none', 'client_secret_basic', 'client_secret_post'].includes(authMethod)) {
     throw registrationFailure(
       diagnostic,
       'Dynamic Client Registration returned an unsupported token auth method'
     );
   }
-  if (authMethod === 'client_secret_basic' && !result.client_secret) {
+  if (authMethod !== 'none' && !result.client_secret) {
     throw registrationFailure(
       diagnostic,
       'Dynamic Client Registration omitted the required client secret'
@@ -687,7 +725,12 @@ export function __dynamicClientCacheSizeForTests(): number {
  */
 export function __seedDynamicClientCacheForTests(
   registrationEndpoint: string,
-  entry: { client_id: string; client_secret?: string; redirect_uri: string }
+  entry: {
+    client_id: string;
+    client_secret?: string;
+    token_endpoint_auth_method?: string;
+    redirect_uri: string;
+  }
 ): void {
   dynamicClientCache.set(registrationEndpoint, entry);
 }
@@ -743,7 +786,11 @@ async function registerDynamicClient(
   const cached = reuseLocalCache ? dynamicClientCache.get(cacheKey) : undefined;
   if (cached && cached.redirect_uri === redirectUri) {
     console.log('[MCP OAuth] Using cached dynamic client registration');
-    return { client_id: cached.client_id, client_secret: cached.client_secret };
+    return {
+      client_id: cached.client_id,
+      client_secret: cached.client_secret,
+      token_endpoint_auth_method: cached.token_endpoint_auth_method,
+    };
   }
 
   console.log('[MCP OAuth] Performing Dynamic Client Registration');
@@ -799,6 +846,7 @@ async function registerDynamicClient(
     dynamicClientCache.set(cacheKey, {
       client_id: result.client_id,
       client_secret: result.client_secret,
+      token_endpoint_auth_method: result.token_endpoint_auth_method,
       redirect_uri: redirectUri,
     });
   }
@@ -1099,7 +1147,8 @@ async function exchangeCodeForToken(
   clientSecret?: string,
   resourceUri?: string,
   allowLocalhostHttp = false,
-  clientRegistrationInvalidatable = false
+  clientRegistrationInvalidatable = false,
+  clientSecretAuthMethod: OAuthClientSecretAuthMethod = 'client_secret_basic'
 ): Promise<OAuthTokenResponse> {
   const body: Record<string, string> = {
     grant_type: 'authorization_code',
@@ -1109,8 +1158,8 @@ async function exchangeCodeForToken(
   };
   if (resourceUri) body.resource = resourceUri;
 
-  // Build headers — use HTTP Basic auth when client_secret is available (RFC 6749 §2.3.1),
-  // fall back to body params for public clients or providers that don't support Basic auth.
+  // Build headers — use HTTP Basic auth when client_secret is available (RFC 6749 §2.3.1)
+  // unless the provider requires client_secret_post; public clients send client_id in the body.
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
     // GitHub's classic OAuth endpoint returns a form-encoded response by
@@ -1119,7 +1168,10 @@ async function exchangeCodeForToken(
     Accept: 'application/json',
   };
 
-  if (clientSecret) {
+  if (clientSecret && clientSecretAuthMethod === 'client_secret_post') {
+    body.client_id = clientId;
+    body.client_secret = clientSecret;
+  } else if (clientSecret) {
     // Slack and other providers recommend HTTP Basic auth for credentials
     headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
   } else {
@@ -1339,6 +1391,7 @@ export async function performMCPOAuthFlow(
     // Step 5.5: Get or register client_id
     let actualClientId = clientId;
     let clientSecret: string | undefined;
+    let registeredAuthMethod: string | undefined;
 
     // Compute scopes early — needed for both DCR registration and auth URL.
     // Skip auto-populating from resource metadata when client_id is pre-registered.
@@ -1363,6 +1416,7 @@ export async function performMCPOAuthFlow(
         );
         actualClientId = registration.client_id;
         clientSecret = registration.client_secret;
+        registeredAuthMethod = registration.token_endpoint_auth_method;
       } else {
         throw new Error(
           'OAuth client_id is required but the authorization server does not advertise ' +
@@ -1422,7 +1476,12 @@ export async function performMCPOAuthFlow(
       actualClientId,
       clientSecret,
       typeof resourceMetadata.resource === 'string' ? resourceMetadata.resource : undefined,
-      true
+      true,
+      false,
+      selectClientSecretAuthMethod(
+        authServerMetadata.token_endpoint_auth_methods_supported,
+        registeredAuthMethod
+      )
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -1545,6 +1604,11 @@ export interface OAuthFlowContext {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
+  /**
+   * How `clientSecret` is presented on the code exchange. Absent (older or
+   * public-client contexts) means HTTP Basic whenever a secret exists.
+   */
+  tokenEndpointAuthMethod?: OAuthClientSecretAuthMethod;
   /** Exact durable DCR epoch used by this attempt; absent for configured/local clients. */
   clientRegistrationId?: MCPOAuthClientRegistrationID;
   /**
@@ -1602,6 +1666,8 @@ export type MCPOAuthDynamicClientRegistrationResolver = (
 export interface MCPOAuthResolvedClient {
   clientId: string;
   clientSecret?: string;
+  /** RFC 7591 `token_endpoint_auth_method` the provider registered, if any. */
+  registeredTokenEndpointAuthMethod?: string;
   method: 'configured' | 'dynamic_registration';
   clientRegistrationId?: MCPOAuthClientRegistrationID;
   /**
@@ -1842,6 +1908,9 @@ async function resolveOAuthClient(options: {
     return {
       clientId: registration.client_id,
       ...(registration.client_secret ? { clientSecret: registration.client_secret } : {}),
+      ...(registration.token_endpoint_auth_method
+        ? { registeredTokenEndpointAuthMethod: registration.token_endpoint_auth_method }
+        : {}),
       method: 'dynamic_registration',
       ...(resolved.registrationId ? { clientRegistrationId: resolved.registrationId } : {}),
       registeredRedirectUri: options.actualRedirectUri,
@@ -2294,6 +2363,14 @@ async function startMCPOAuthFlowWithAS(opts: {
     pkceVerifier: pkce.verifier,
     clientId: resolvedClient.clientId,
     clientSecret: resolvedClient.clientSecret,
+    ...(resolvedClient.clientSecret
+      ? {
+          tokenEndpointAuthMethod: selectClientSecretAuthMethod(
+            authServerMetadata?.token_endpoint_auth_methods_supported,
+            resolvedClient.registeredTokenEndpointAuthMethod
+          ),
+        }
+      : {}),
     clientRegistrationId: resolvedClient.clientRegistrationId,
     clientSource: resolvedClient.method === 'configured' ? 'configured' : 'dcr',
     ...(resolvedClient.clientName ? { clientName: resolvedClient.clientName } : {}),
@@ -2571,7 +2648,8 @@ export async function completeMCPOAuthFlow(
     context.clientSecret,
     context.resourceUri,
     context.allowLocalhostHttp,
-    Boolean(context.clientRegistrationId)
+    Boolean(context.clientRegistrationId),
+    context.tokenEndpointAuthMethod
   );
 
   console.log('[MCP OAuth] Access token received successfully');

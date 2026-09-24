@@ -125,6 +125,8 @@ function isMaterial(value: unknown): value is MCPOAuthClientRegistrationSealedMa
       material.dcrMode === 'fallback') &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
+    (material.tokenEndpointAuthMethod === undefined ||
+      material.tokenEndpointAuthMethod === 'client_secret_post') &&
     (material.clientSecretExpiresAt === undefined ||
       (Number.isSafeInteger(material.clientSecretExpiresAt) &&
         material.clientSecretExpiresAt! >= 0))
@@ -206,7 +208,9 @@ export class MCPOAuthClientRegistrationAuthority {
       client_id: parsed.clientId,
       ...(parsed.clientSecret ? { client_secret: parsed.clientSecret } : {}),
       redirect_uris: [parsed.redirectUri],
-      token_endpoint_auth_method: parsed.clientSecret ? 'client_secret_basic' : 'none',
+      token_endpoint_auth_method: parsed.clientSecret
+        ? (parsed.tokenEndpointAuthMethod ?? 'client_secret_basic')
+        : 'none',
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       ...(parsed.clientSecretExpiresAt !== undefined
@@ -353,6 +357,10 @@ export class MCPOAuthClientRegistrationAuthority {
           dcrMode: input.dcrMode,
           clientId: registered.client_id,
           ...(registered.client_secret ? { clientSecret: registered.client_secret } : {}),
+          ...(registered.client_secret &&
+          registered.token_endpoint_auth_method === 'client_secret_post'
+            ? { tokenEndpointAuthMethod: 'client_secret_post' as const }
+            : {}),
           ...(expiresAt !== undefined && expiresAt > 0 ? { clientSecretExpiresAt: expiresAt } : {}),
         };
         const sealed = sealBoundSecret(
