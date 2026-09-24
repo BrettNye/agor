@@ -73,6 +73,7 @@ import {
   selectBranchById,
   selectCardById,
   selectCommentById,
+  selectLoading,
   selectMcpServerById,
   selectRepoById,
   selectUserById,
@@ -91,6 +92,11 @@ import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import { AppNode } from './canvas/AppNodeLazy';
 import { ArtifactNode } from './canvas/ArtifactNodeLazy';
+import {
+  archivedBranchIdsKey,
+  archivedCardIdsKey,
+  idSetFromKey,
+} from './canvas/archivedPlacements';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { MarkdownNode } from './canvas/MarkdownNode';
 import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCursorLayer';
@@ -542,32 +548,20 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     }, [boardObjectsForBoard]);
 
     // Archived branches/cards keep their board_objects row (zone_id included)
-    // so unarchive restores them in place. Collect the archived ones placed on
-    // this board so zone pinned-item counts can skip them. Keyed by a sorted id
-    // string so the Sets keep their identity across unrelated branch/card
-    // patches and don't rebuild every board-object node.
-    const archivedBranchIdsKey = useMemo(() => {
-      const ids: string[] = [];
-      for (const branchId of boardObjectByBranch.keys()) {
-        if (branchById.get(branchId)?.archived) ids.push(branchId);
-      }
-      return ids.sort().join('\n');
-    }, [boardObjectByBranch, branchById]);
-    const archivedCardIdsKey = useMemo(() => {
-      const ids: string[] = [];
-      for (const cardId of boardObjectByCard.keys()) {
-        if (cardById.get(cardId)?.archived) ids.push(cardId);
-      }
-      return ids.sort().join('\n');
-    }, [boardObjectByCard, cardById]);
-    const archivedBranchIds = useMemo(
-      () => new Set(archivedBranchIdsKey ? archivedBranchIdsKey.split('\n') : []),
-      [archivedBranchIdsKey]
+    // so unarchive restores them in place; zone pinned-item counts skip them.
+    // The Sets are memoized on a sorted id key so they keep their identity
+    // across unrelated branch/card patches and don't rebuild every node.
+    const initialLoading = useAgorStore(selectLoading);
+    const archivedBranchKey = useMemo(
+      () => archivedBranchIdsKey(boardObjectByBranch.keys(), branchById, initialLoading),
+      [boardObjectByBranch, branchById, initialLoading]
     );
-    const archivedCardIds = useMemo(
-      () => new Set(archivedCardIdsKey ? archivedCardIdsKey.split('\n') : []),
-      [archivedCardIdsKey]
+    const archivedCardKey = useMemo(
+      () => archivedCardIdsKey(boardObjectByCard.keys(), cardById),
+      [boardObjectByCard, cardById]
     );
+    const archivedBranchIds = useMemo(() => idSetFromKey(archivedBranchKey), [archivedBranchKey]);
+    const archivedCardIds = useMemo(() => idSetFromKey(archivedCardKey), [archivedCardKey]);
 
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
