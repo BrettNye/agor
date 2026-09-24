@@ -66,6 +66,7 @@ holds:
 | `oauth_token_expires_at`                  | Absolute Date or NULL (when provider omits `expires_in`)  |
 | `oauth_refresh_token`                     | nullable — present iff provider issued one                |
 | `oauth_client_id` / `oauth_client_secret` | Bound to the grant (DCR-issued or admin-pre-registered)   |
+| `oauth_token_endpoint_auth_method`        | Secret presentation the exchange used; NULL = HTTP Basic  |
 | `created_at` / `updated_at`               | timestamps                                                |
 
 Co-locating client credentials with the refresh_token is correct: refreshing

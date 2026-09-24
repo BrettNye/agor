@@ -2139,6 +2139,9 @@ export const userMcpOauthTokens = pgTable(
     // Must be preserved across refreshes.
     oauth_client_id: text('oauth_client_id'),
     oauth_client_secret: text('oauth_client_secret'),
+    // How the code exchange presented the secret, reused verbatim on refresh.
+    // NULL = grant stored before this was recorded: refresh with HTTP Basic.
+    oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     // Durable grant/config identity and database-coordinated refresh fencing.
     grant_generation: bigint('grant_generation', { mode: 'number' }).notNull().default(0),
     grant_binding_version: integer('grant_binding_version'),

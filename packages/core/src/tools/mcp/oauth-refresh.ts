@@ -22,6 +22,7 @@ import {
 } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
 import { inferOAuthTokenUrl } from './oauth-auth';
+import type { OAuthClientSecretAuthMethod } from './oauth-mcp-transport';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
@@ -154,6 +155,8 @@ export interface RefreshMCPTokenOptions {
   refreshToken: string;
   clientId: string;
   clientSecret?: string;
+  /** How `clientSecret` is presented; defaults to HTTP Basic (RFC 8414 §2). */
+  clientSecretAuthMethod?: OAuthClientSecretAuthMethod;
   resourceUri?: string;
   /** Exact redirect used to issue this grant (required by GitLab on refresh). */
   redirectUri?: string;
@@ -195,7 +198,10 @@ export async function refreshMCPToken(
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json',
   };
-  if (opts.clientSecret) {
+  if (opts.clientSecret && opts.clientSecretAuthMethod === 'client_secret_post') {
+    body.client_id = opts.clientId;
+    body.client_secret = opts.clientSecret;
+  } else if (opts.clientSecret) {
     headers.Authorization = `Basic ${Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64')}`;
   } else {
     body.client_id = opts.clientId;
@@ -509,6 +515,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
         refreshToken: row.oauth_refresh_token!,
         clientId: row.oauth_client_id!,
         clientSecret: row.oauth_client_secret,
+        clientSecretAuthMethod: row.oauth_token_endpoint_auth_method,
         resourceUri: row.oauth_resource_uri,
         redirectUri: row.oauth_redirect_uri,
         allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
@@ -669,6 +676,7 @@ async function refreshStandalone(
       refreshToken: row.oauth_refresh_token,
       clientId,
       clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
+      clientSecretAuthMethod: row.oauth_token_endpoint_auth_method,
       resourceUri: row.oauth_resource_uri,
       redirectUri: row.oauth_redirect_uri,
       allowLocalhostHttp: true,

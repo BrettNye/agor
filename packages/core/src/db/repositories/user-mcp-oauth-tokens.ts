@@ -11,7 +11,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
+import type {
+  MCPOAuthGrantBindingVersion,
+  MCPOAuthTokenEndpointAuthMethod,
+  MCPServerID,
+  UserID,
+} from '@agor/core/types';
 import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import {
@@ -45,6 +50,11 @@ export interface UserMCPOAuthToken {
   oauth_refresh_token?: string;
   oauth_client_id?: string;
   oauth_client_secret?: string;
+  /**
+   * How the code exchange presented `oauth_client_secret`; refresh reuses it.
+   * Absent for grants stored before it was recorded, which refresh with Basic.
+   */
+  oauth_token_endpoint_auth_method?: MCPOAuthTokenEndpointAuthMethod;
   grant_generation: number;
   grant_binding_version?: number;
   grant_binding_fingerprint?: string;
@@ -137,6 +147,12 @@ export interface SaveTokenInput {
   /** If absent on update, the existing client_secret is kept. */
   clientSecret?: string;
   /**
+   * How the code exchange presented `clientSecret`: the method name only.
+   * Written whenever the client credentials are, so an absent value records
+   * NULL (refresh with HTTP Basic) rather than keeping a stale method.
+   */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
+  /**
    * Discovered endpoint retained for standalone/SQLite refresh. PostgreSQL
    * grants take this value only from the authoritative grant binding below.
    */
@@ -187,6 +203,10 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function tokenEndpointAuthMethodValue(value: unknown): MCPOAuthTokenEndpointAuthMethod | undefined {
+  return value === 'client_secret_basic' || value === 'client_secret_post' ? value : undefined;
+}
+
 function grantSecretBinding(
   tenantId: string,
   userId: UserID | null,
@@ -233,6 +253,9 @@ async function rowToToken(
     oauth_refresh_token: await open(row.oauth_refresh_token, 'refresh-token', 'refresh'),
     oauth_client_id: await open(row.oauth_client_id, 'client-id', 'client-id'),
     oauth_client_secret: await open(row.oauth_client_secret, 'client-secret', 'client-secret'),
+    oauth_token_endpoint_auth_method: tokenEndpointAuthMethodValue(
+      raw.oauth_token_endpoint_auth_method
+    ),
     grant_generation: generation,
     grant_binding_version:
       raw.grant_binding_version == null ? undefined : Number(raw.grant_binding_version),
@@ -643,6 +666,7 @@ export class UserMCPOAuthTokenRepository {
             oauth_refresh_token: seal(input.refreshToken, 'refresh-token', 'refresh') ?? null,
             oauth_client_id: seal(input.clientId, 'client-id', 'client-id') ?? null,
             oauth_client_secret: seal(input.clientSecret, 'client-secret', 'client-secret') ?? null,
+            oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? null,
             grant_generation: binding.generation,
             grant_binding_version: binding.version,
             grant_binding_fingerprint: binding.fingerprint,
@@ -677,6 +701,7 @@ export class UserMCPOAuthTokenRepository {
         oauth_client_secret:
           boundReplacement?.oauth_client_secret ??
           seal(input.clientSecret, 'client-secret', 'client-secret'),
+        oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? null,
         grant_generation: generation,
         grant_binding_version: binding?.version,
         grant_binding_fingerprint: binding?.fingerprint,
@@ -752,6 +777,9 @@ export class UserMCPOAuthTokenRepository {
                           'client-secret'
                         ),
                       }
+                    : {}),
+                  ...(input.clientId != null || input.clientSecret != null
+                    ? { oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? null }
                     : {}),
                   ...(input.tokenEndpoint != null
                     ? { oauth_token_endpoint: input.tokenEndpoint }

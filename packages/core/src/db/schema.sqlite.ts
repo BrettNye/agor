@@ -1960,6 +1960,9 @@ export const userMcpOauthTokens = sqliteTable(
     // Must be preserved across refreshes.
     oauth_client_id: text('oauth_client_id'),
     oauth_client_secret: text('oauth_client_secret'),
+    // How the code exchange presented the secret, reused verbatim on refresh.
+    // NULL = grant stored before this was recorded: refresh with HTTP Basic.
+    oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     grant_generation: integer('grant_generation').notNull().default(0),
     grant_binding_version: integer('grant_binding_version'),
     grant_binding_fingerprint: text('grant_binding_fingerprint', { length: 64 }),

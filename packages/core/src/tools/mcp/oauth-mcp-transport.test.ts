@@ -1407,11 +1407,20 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
       },
     ],
     [
-      'incompatible token auth method',
+      // client_secret_post is supported, but only with the secret it needs.
+      'incompatible token auth method (client_secret_post without a client secret)',
       {
         client_id: 'client-id',
         redirect_uris: ['http://127.0.0.1:9999/oauth/callback'],
         token_endpoint_auth_method: 'client_secret_post',
+      },
+    ],
+    [
+      'unsupported token auth method',
+      {
+        client_id: 'client-id',
+        redirect_uris: ['http://127.0.0.1:9999/oauth/callback'],
+        token_endpoint_auth_method: 'private_key_jwt',
       },
     ],
     [

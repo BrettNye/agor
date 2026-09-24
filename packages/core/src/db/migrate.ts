@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0115_mcp_oauth_token_endpoint_auth_method',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'schema',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Adds a nullable column recording how each MCP OAuth grant presents its client secret. Existing grants are not backfilled and keep refreshing with HTTP Basic.',
+      }),
+    },
+  ],
+  [
     '0113_session_recency_not_null',
     {
       requiresOfflineCutover: false,
