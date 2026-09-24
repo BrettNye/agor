@@ -15,6 +15,7 @@ import type {
   MCPOAuthDCRMode,
   MCPOAuthFailureReason,
   MCPOAuthRuntimeCompatibilityMode,
+  MCPOAuthTokenEndpointAuthMethod,
 } from '../../types/mcp.js';
 import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
@@ -215,7 +216,7 @@ export interface AuthorizationServerMetadata {
 }
 
 /** How a confidential client presents its secret at the token endpoint. */
-export type OAuthClientSecretAuthMethod = 'client_secret_basic' | 'client_secret_post';
+export type OAuthClientSecretAuthMethod = MCPOAuthTokenEndpointAuthMethod;
 
 /**
  * Choose how a confidential client authenticates to the token endpoint.
@@ -224,8 +225,8 @@ export type OAuthClientSecretAuthMethod = 'client_secret_basic' | 'client_secret
  * registered the client for it, or when the authorization server advertises it
  * and not `client_secret_basic`. Everything else keeps the RFC 8414 default of
  * HTTP Basic. A registered `client_secret_basic` is not consulted: stored DCR
- * records report it for every secret-bearing client, and the refresh path can
- * only re-derive the method from metadata (see `oauth-refresh.ts`).
+ * records report it for every secret-bearing client. The choice is persisted
+ * on the grant, and refresh reuses it rather than choosing again.
  */
 export function selectClientSecretAuthMethod(
   supported: unknown,

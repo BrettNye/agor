@@ -1,0 +1,1 @@
+ALTER TABLE `user_mcp_oauth_tokens` ADD `oauth_token_endpoint_auth_method` text;

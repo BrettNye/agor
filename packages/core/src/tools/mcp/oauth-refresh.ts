@@ -22,11 +22,7 @@ import {
 } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
 import { inferOAuthTokenUrl } from './oauth-auth';
-import {
-  fetchAuthorizationServerMetadata,
-  type OAuthClientSecretAuthMethod,
-  selectClientSecretAuthMethod,
-} from './oauth-mcp-transport';
+import type { OAuthClientSecretAuthMethod } from './oauth-mcp-transport';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
@@ -287,48 +283,6 @@ export async function refreshMCPToken(
   };
 }
 
-const CLIENT_AUTH_METHOD_TTL_MS = 60 * 60_000;
-const _clientAuthMethodByIssuer = new Map<
-  string,
-  { method: OAuthClientSecretAuthMethod; resolvedAt: number }
->();
-export function __resetClientAuthMethodCacheForTests(): void {
-  _clientAuthMethodByIssuer.clear();
-}
-
-/**
- * The grant row does not record how the code exchange presented the client
- * secret, and recording it would need a schema migration. The exchange chose
- * it from the issuer's RFC 8414 metadata, so re-read that metadata and apply
- * the same rule. A grant with no stored issuer keeps HTTP Basic, as before.
- * A metadata failure falls back to the method last resolved for the issuer,
- * else Basic, so an issuer whose metadata is unreachable refreshes as it
- * always did and a transient blip does not downgrade a known post-only one.
- */
-export async function resolveRefreshClientSecretAuthMethod(
-  issuer: string | undefined,
-  clientSecret: string | undefined,
-  allowLocalhostHttp?: boolean
-): Promise<OAuthClientSecretAuthMethod | undefined> {
-  if (!clientSecret) return undefined;
-  if (!issuer) return 'client_secret_basic';
-  const cached = _clientAuthMethodByIssuer.get(issuer);
-  if (cached && Date.now() - cached.resolvedAt < CLIENT_AUTH_METHOD_TTL_MS) return cached.method;
-  try {
-    // Only the auth-method list is read; the credential still goes to the
-    // grant's pinned token endpoint, so the permissive probe set is safe here.
-    const metadata = await fetchAuthorizationServerMetadata(issuer, {
-      compatibilityMode: 'legacy',
-      allowLocalhostHttp,
-    });
-    const method = selectClientSecretAuthMethod(metadata.token_endpoint_auth_methods_supported);
-    _clientAuthMethodByIssuer.set(issuer, { method, resolvedAt: Date.now() });
-    return method;
-  } catch {
-    return cached?.method ?? 'client_secret_basic';
-  }
-}
-
 type MutexKey = string;
 interface StandaloneRefreshFlight {
   version: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>;
@@ -555,17 +509,13 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       if (!row.oauth_token_endpoint) throw new MissingTokenEndpointError();
       await tenantWork(deps, (db) => assertGrantStillAuthorized(deps, row, db));
     },
-    exchange: async ({ row }) =>
+    exchange: ({ row }) =>
       refreshMCPToken({
         tokenEndpoint: row.oauth_token_endpoint!,
         refreshToken: row.oauth_refresh_token!,
         clientId: row.oauth_client_id!,
         clientSecret: row.oauth_client_secret,
-        clientSecretAuthMethod: await resolveRefreshClientSecretAuthMethod(
-          row.oauth_issuer,
-          row.oauth_client_secret,
-          deps.allowLocalhostHttpDevelopment
-        ),
+        clientSecretAuthMethod: row.oauth_token_endpoint_auth_method,
         resourceUri: row.oauth_resource_uri,
         redirectUri: row.oauth_redirect_uri,
         allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
@@ -721,17 +671,12 @@ async function refreshStandalone(
   )
     throw new GrantConfigurationChangedError();
   try {
-    const clientSecret = row.oauth_client_secret ?? server?.auth?.oauth_client_secret;
     const result = await refreshMCPToken({
       tokenEndpoint,
       refreshToken: row.oauth_refresh_token,
       clientId,
-      clientSecret,
-      clientSecretAuthMethod: await resolveRefreshClientSecretAuthMethod(
-        row.oauth_issuer,
-        clientSecret,
-        true
-      ),
+      clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
+      clientSecretAuthMethod: row.oauth_token_endpoint_auth_method,
       resourceUri: row.oauth_resource_uri,
       redirectUri: row.oauth_redirect_uri,
       allowLocalhostHttp: true,

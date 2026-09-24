@@ -64,7 +64,6 @@ import {
   startMCPOAuthFlow,
 } from './oauth-mcp-transport';
 import {
-  __resetClientAuthMethodCacheForTests,
   __resetRefreshMutexForTests,
   refreshAndPersistToken,
   refreshMCPToken,
@@ -171,7 +170,10 @@ async function exchangeWithMetadata(methods?: string[]) {
   return { context, requests: tokenRequests(fetchMock) };
 }
 
-/** Standalone refresh of a stored grant issued by `ISSUER`. */
+/**
+ * Standalone refresh of a stored grant issued by `ISSUER`. The grant records
+ * no auth method unless `row` sets `oauth_token_endpoint_auth_method`.
+ */
 async function refreshStoredGrant(row: Record<string, unknown> = {}) {
   mockGetToken.mockResolvedValue({
     user_id: 'user-1',
@@ -204,7 +206,6 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   clearAuthCodeTokenCache();
   __resetRefreshMutexForTests();
-  __resetClientAuthMethodCacheForTests();
   mockGetToken.mockReset();
   mockFindById.mockReset();
 });
@@ -246,28 +247,15 @@ describe('client_secret_post refresh', () => {
   it('client_secret_post refresh sends client_id and client_secret in the form body and no Authorization header', async () => {
     const fetchMock = stubProvider({ methods: ['client_secret_post'] });
 
-    await expect(refreshStoredGrant()).resolves.toBe('new-access');
+    await expect(
+      refreshStoredGrant({ oauth_token_endpoint_auth_method: 'client_secret_post' })
+    ).resolves.toBe('new-access');
 
     const requests = tokenRequests(fetchMock);
     expect(requests).toHaveLength(1);
     expectClientSecretPost(requests[0]);
     expect(requests[0].body.get('grant_type')).toBe('refresh_token');
     expect(requests[0].body.get('refresh_token')).toBe('refresh-1');
-  });
-
-  it('client_secret_post refresh keeps the last resolved method when metadata is briefly unavailable', async () => {
-    stubProvider({ methods: ['client_secret_post'] });
-    await refreshStoredGrant();
-
-    // Past the TTL the method is re-resolved; a failed fetch must not
-    // silently downgrade a known post-only issuer to Basic.
-    const now = Date.now();
-    vi.spyOn(Date, 'now').mockReturnValue(now + 2 * 60 * 60_000);
-    const fetchMock = stubProvider({ methods: ['client_secret_post'], metadataStatus: 503 });
-    await refreshStoredGrant();
-
-    expect(fetchMock.mock.calls.some(([url]) => String(url) === METADATA_URL)).toBe(true);
-    expectClientSecretPost(tokenRequests(fetchMock)[0]);
   });
 
   it('client_secret_post refreshMCPToken never sends the secret both ways', async () => {

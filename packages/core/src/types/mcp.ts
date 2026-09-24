@@ -236,6 +236,9 @@ export function isMCPOAuthGrantBindingVersion(
   );
 }
 
+/** How a confidential MCP OAuth client presents its secret at the token endpoint. */
+export type MCPOAuthTokenEndpointAuthMethod = 'client_secret_basic' | 'client_secret_post';
+
 /**
  * Secret-bearing material required to exchange an authorization code.
  * PostgreSQL stores this structure only inside an authenticated encrypted
@@ -281,7 +284,7 @@ export interface MCPOAuthPendingFlowSealedMaterial {
    * Basic. Not a binding, so it needs no version bump: a daemon that ignores
    * it falls back to Basic, which a post-only provider refuses (fail-closed).
    */
-  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post';
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   /** Exact durable DCR UUID epoch used by this attempt. */
   clientRegistrationId?: MCPOAuthClientRegistrationID;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;

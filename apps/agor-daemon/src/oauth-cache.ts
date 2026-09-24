@@ -45,6 +45,8 @@ export async function persistOAuthToken(
     clientId?: string;
     /** client_secret used for the grant (absent for public clients). */
     clientSecret?: string;
+    /** How the code exchange presented `clientSecret`; refresh reuses it. */
+    tokenEndpointAuthMethod?: SaveTokenInput['tokenEndpointAuthMethod'];
     /**
      * Token endpoint discovered/used for this grant. Standalone SQLite grants
      * retain it on the grant row so later refreshes do not have to guess from
@@ -107,6 +109,7 @@ export async function persistOAuthToken(
       refreshToken: tokenResponse.refresh_token,
       clientId: pendingFlow.clientId,
       clientSecret: pendingFlow.clientSecret,
+      tokenEndpointAuthMethod: pendingFlow.tokenEndpointAuthMethod,
       tokenEndpoint: pendingFlow.tokenEndpoint,
       resourceUri: pendingFlow.resourceUri,
       grantBinding: pendingFlow.grantBinding,
