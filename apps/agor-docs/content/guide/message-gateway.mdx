@@ -169,6 +169,19 @@ In Slack channels, Agor uses a hard mention rule:
 
 This keeps normal team discussions from turning into implicit agent prompts while still making late mentions feel natural.
 
+### Slack prompt size limits
+
+Agor caps how much Slack text goes into each agent prompt. These limits are fixed in the daemon and are not configurable:
+
+| Text | Limit | Formatting |
+| --- | --- | --- |
+| The live `@mention` that triggered the prompt, when Agor wraps it in Slack thread context | 1600 characters | Line breaks are kept |
+| Each earlier Slack thread message included as catch-up context | 1200 characters | Flattened to one line |
+| The proactive Agor message a Slack thread was started from | 2000 characters | Quoted, line breaks kept |
+| The first human reply to that proactive message | 2000 characters | Quoted, line breaks kept |
+
+When a message is longer than its limit, the agent gets the first characters up to the limit, then a marker like `[Agor omitted 350 characters: message exceeded the 1600-character prompt limit]`. The daemon also logs a `[gateway] event=slack_prompt_truncated` warning that records the part, the gateway channel and Slack thread IDs, and the original and kept lengths. The message text itself is not logged. To give the agent the full text, split it across several messages, or attach it as a file on a channel with file ingestion enabled.
+
 ## Setting Up Slack Integration
 
 Slack setup is **manifest-based**. Instead of clicking through OAuth scopes, event subscriptions, and Socket Mode by hand, you describe what the bot should do and Agor produces a complete Slack app manifest. Pasting that manifest into Slack's "Create app from manifest" flow preconfigures every scope and event in one step, so the scope list can never drift from what the connector actually calls.

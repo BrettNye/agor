@@ -646,12 +646,15 @@ function gatewayMessageText(message: Pick<Message, 'content' | 'content_preview'
   return message.content_preview || '';
 }
 
-function quoteForPrompt(text: string, maxChars = 2000): string {
-  const truncated = text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
-  return truncated
+function blockquoteForPrompt(text: string): string {
+  return text
     .split(/\r?\n/)
     .map((line) => `> ${line}`)
     .join('\n');
+}
+
+function quoteForPrompt(text: string, maxChars = 2000): string {
+  return blockquoteForPrompt(text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`);
 }
 
 function getSlackMessageTs(metadata?: Record<string, unknown>): string | undefined {
@@ -678,10 +681,37 @@ function formatUtcLabel(value: string | undefined): string | undefined {
     .replace(/\.\d{3}Z$/, ' UTC');
 }
 
-function oneLineForPrompt(text: string, maxChars = 900): string {
-  const normalized = text.replace(/\s+/g, ' ').trim() || '(no text)';
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+// Slack prompt limits. Text past a limit is cut; the prompt then carries a
+// `[Agor omitted N characters ...]` marker and the daemon logs a `[gateway]`
+// warning with lengths and identifiers only (never the message text).
+// Documented in apps/agor-docs/content/guide/message-gateway.mdx.
+
+/** 2000 chars: the outbound seed message and the first human reply, each quoted in a seeded Slack thread's initial prompt. */
+export const SLACK_SEED_QUOTE_MAX_CHARS = 2000;
+/** 1600 chars: the live @mention that triggered the prompt ("Current summon"); line breaks are kept. */
+export const SLACK_LIVE_MENTION_MAX_CHARS = 1600;
+/** 1200 chars: each prior Slack thread message in catch-up context, flattened to one line. */
+export const SLACK_THREAD_HISTORY_MESSAGE_MAX_CHARS = 1200;
+
+type SlackPromptPart = 'live_mention' | 'thread_history_message' | 'seed_message' | 'first_reply';
+
+/**
+ * Cut `text` to `maxChars`, appending an explicit omission marker (joined by
+ * `separator`) and logging one warning when anything is dropped.
+ */
+function truncateSlackPromptText(
+  text: string,
+  maxChars: number,
+  separator: string,
+  context: { part: SlackPromptPart; channelId: string; threadId: string }
+): string {
+  if (text.length <= maxChars) return text;
+  const kept = text.slice(0, maxChars);
+  const omitted = text.length - kept.length;
+  console.warn(
+    `[gateway] event=slack_prompt_truncated part=${context.part} channel_id=${context.channelId} thread_id=${context.threadId} original_chars=${text.length} kept_chars=${kept.length}`
+  );
+  return `${kept}${separator}[Agor omitted ${omitted} characters: message exceeded the ${maxChars}-character prompt limit]`;
 }
 
 const SLACK_GATEWAY_REPLY_NOTE =
@@ -695,7 +725,7 @@ function prependSlackGatewayReplyNote(prompt: string): string {
   return `${SLACK_GATEWAY_REPLY_NOTE}\n\n${prompt}`;
 }
 
-function formatSlackCatchUpPrompt(args: {
+export function formatSlackCatchUpPrompt(args: {
   channel: GatewayChannel;
   threadId: string;
   currentText: string;
@@ -717,6 +747,7 @@ function formatSlackCatchUpPrompt(args: {
   const currentTs = getSlackMessageTs(args.metadata);
   const currentTime = formatUtcLabel(currentTs);
   const contextMessages = args.messages.filter((message) => !message.is_trigger);
+  const truncationContext = { channelId: args.channel.id, threadId: args.threadId };
   const lines = [
     '**Slack context**',
     `- Channel: ${slackChannelName ? `#${slackChannelName}` : slackChannelId}`,
@@ -741,7 +772,13 @@ function formatSlackCatchUpPrompt(args: {
     }
     for (const message of contextMessages) {
       const time = formatUtcLabel(message.iso_time) ?? message.iso_time;
-      lines.push(`- **${message.actor_label}** · ${time}: ${oneLineForPrompt(message.text, 1200)}`);
+      const text = truncateSlackPromptText(
+        message.text.replace(/\s+/g, ' ').trim() || '(no text)',
+        SLACK_THREAD_HISTORY_MESSAGE_MAX_CHARS,
+        ' ',
+        { ...truncationContext, part: 'thread_history_message' }
+      );
+      lines.push(`- **${message.actor_label}** · ${time}: ${text}`);
     }
     if (args.hasMore) {
       lines.push(
@@ -749,10 +786,18 @@ function formatSlackCatchUpPrompt(args: {
         '_Slack thread context was truncated. Use the Slack thread history tool if older omitted messages are needed._'
       );
     }
+    // Keep the live mention's line breaks; continuation lines are indented so
+    // they stay inside the list item.
+    const currentText = truncateSlackPromptText(
+      args.currentText.replace(/\r\n?/g, '\n').trim() || '(no text)',
+      SLACK_LIVE_MENTION_MAX_CHARS,
+      '\n',
+      { ...truncationContext, part: 'live_mention' }
+    ).replace(/\n/g, '\n  ');
     lines.push(
       '',
       '### Current summon',
-      `- **${senderName ?? 'Slack user'}**${currentTime ? ` · ${currentTime}` : ''}: ${oneLineForPrompt(args.currentText, 1600)}`,
+      `- **${senderName ?? 'Slack user'}**${currentTime ? ` · ${currentTime}` : ''}: ${currentText}`,
       '',
       '**Instruction:** Answer the current summon using the context above. Do not repeat the transcript unless asked.'
     );
@@ -763,7 +808,7 @@ function formatSlackCatchUpPrompt(args: {
   return lines.join('\n');
 }
 
-function buildSeededThreadInitialPrompt(args: {
+export function buildSeededThreadInitialPrompt(args: {
   seed: GatewayOutboundMessage;
   channel: GatewayChannel;
   replyText: string;
@@ -792,6 +837,17 @@ function buildSeededThreadInitialPrompt(args: {
     : typeof args.metadata?.slack_channel_name === 'string'
       ? args.metadata.slack_channel_name
       : undefined;
+  // Discord keeps the legacy ellipsis cut; Slack marks and logs truncation.
+  const quoteSeededThreadText = (text: string, part: SlackPromptPart): string =>
+    isDiscord
+      ? quoteForPrompt(text)
+      : blockquoteForPrompt(
+          truncateSlackPromptText(text, SLACK_SEED_QUOTE_MAX_CHARS, '\n', {
+            part,
+            channelId: args.channel.id,
+            threadId: args.seed.platform_thread_id,
+          })
+        );
 
   const lines = [
     '[Gateway context]',
@@ -811,10 +867,10 @@ function buildSeededThreadInitialPrompt(args: {
     ...(senderEmail ? [`${provider} sender email: ${senderEmail}`] : []),
     '',
     'Original proactive Agor message:',
-    quoteForPrompt(args.seed.message_text),
+    quoteSeededThreadText(args.seed.message_text, 'seed_message'),
     '',
     `Human ${provider} reply:`,
-    quoteForPrompt(args.replyText),
+    quoteSeededThreadText(args.replyText, 'first_reply'),
   ];
   return lines.join('\n');
 }
