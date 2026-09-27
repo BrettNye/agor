@@ -3009,6 +3009,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       app: snapshot.app,
     });
 
+    // The 'all'-or-admin gate above authorized this render, and the values come
+    // from the repo's admin-managed templates. Persist them as an internal write
+    // so the patch hooks do not re-authorize it as a caller-supplied env-command
+    // edit (requireAdminForEnvConfig), which would demand admin (#2803). Env
+    // policy validation still runs on the internal patch.
     return await this.withTenantDatabase(params, () =>
       this.patch(
         id,
@@ -3022,7 +3027,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           app_url: snapshot.app,
           updated_at: new Date().toISOString(),
         },
-        params
+        { ...params, provider: undefined }
       )
     );
   }
